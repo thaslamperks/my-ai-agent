@@ -1160,6 +1160,11 @@ const OPTIONAL_SKILL_IDS = [
   "customer-support",
   "domain-research",
 ];
+// Skills authored locally in this repository rather than shipped by the course
+// template. They are listed separately so the template's own reviewed and
+// optional sets stay recognisable, and so removing a local skill is a one-line
+// change here.
+const LOCAL_SKILL_IDS = ["linkedin-profile-lookup", "linkedin-prospect-search"];
 
 const skillBundle = await compileSkills(join(projectRoot, "skills"));
 const enabledSkillIds = skillBundle.enabledSkills.map((skill) => skill.id);
@@ -1169,9 +1174,12 @@ check(
 );
 check(
   enabledSkillIds.every(
-    (id) => REVIEWED_SKILL_IDS.includes(id) || OPTIONAL_SKILL_IDS.includes(id),
+    (id) =>
+      REVIEWED_SKILL_IDS.includes(id) ||
+      OPTIONAL_SKILL_IDS.includes(id) ||
+      LOCAL_SKILL_IDS.includes(id),
   ),
-  "Enabled skill list must contain only reviewed or shipped optional skills",
+  "Enabled skill list must contain only reviewed, shipped optional, or locally authored skills",
 );
 check(
   skillBundle.combinedInstructions.length <= 24_000 &&

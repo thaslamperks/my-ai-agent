@@ -1664,6 +1664,18 @@ function sqliteQuickCheck(databasePath) {
   };
 }
 
+// Chat store schema versions this release understands. Version 1 is the
+// original transcript schema; version 2 adds the domain-research business
+// memory tables. The store migrates an older database forward on open, so an
+// older but supported version is healthy rather than a failure.
+const SUPPORTED_CHAT_SCHEMA_VERSIONS = [1, 2];
+
+function chatSchemaIsSupported(check) {
+  return (
+    check.ok && SUPPORTED_CHAT_SCHEMA_VERSIONS.includes(check.schemaVersion)
+  );
+}
+
 async function commandBackup() {
   requireLocalInstall();
   if (!existsSync(paths.n8nDataDir)) {
@@ -1788,7 +1800,7 @@ async function commandRestore(args) {
       return 1;
     }
     const chatCheck = sqliteQuickCheck(chatBackupDatabase);
-    if (!chatCheck.ok || chatCheck.schemaVersion !== 1) {
+    if (!chatSchemaIsSupported(chatCheck)) {
       printError("The backed-up chat database failed its integrity or schema check. No local data was changed.");
       return 1;
     }
@@ -1962,8 +1974,10 @@ async function commandDiagnose() {
   }
   if (existsSync(paths.chatDatabase)) {
     const chatDatabaseCheck = sqliteQuickCheck(paths.chatDatabase);
-    if (chatDatabaseCheck.ok && chatDatabaseCheck.schemaVersion === 1) {
-      ok("The local chat database and search index are ready (schema 1).");
+    if (chatSchemaIsSupported(chatDatabaseCheck)) {
+      ok(
+        `The local chat database and search index are ready (schema ${chatDatabaseCheck.schemaVersion}).`,
+      );
     } else {
       failure(
         "The local chat database failed its integrity or schema check. Create a private backup before troubleshooting it.",
