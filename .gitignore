@@ -25,6 +25,12 @@ Thumbs.db
 .idea/
 .vscode/
 
+# Claude Code local tooling: the preview launcher points at this machine's
+# running services, and settings.local.json holds personal overrides. Shared
+# project config such as .claude/settings.json stays tracked.
+.claude/launch.json
+.claude/settings.local.json
+
 # Future chat application output
 node_modules/
 dist/
