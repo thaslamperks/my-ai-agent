@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "agents": [
+    {
+      "id": "project-manager",
+      "name": "Project Manager",
+      "description": "Plans projects, analyses meetings, and turns decisions into safe next actions.",
+      "status": "active",
+      "workflowPath": "/webhook/chat",
+      "examplePrompts": [
+        "Turn these meeting notes into decisions and action items",
+        "Build a practical project plan from this document",
+        "Show me the highest-priority work in my local project"
+      ]
+    },
+    {
+      "id": "sales",
+      "name": "Sales",
+      "description": "Researches prospects, drafts replies, and turns calls into proposals.",
+      "status": "active",
+      "workflowPath": "/webhook/chat",
+      "examplePrompts": [
+        "Draft a reply to this enquiry that just came in",
+        "Turn these call notes into a recap and a proposal",
+        "Write a cold email to this person"
+      ]
+    },
+    {
+      "id": "marketing",
+      "name": "Marketing",
+      "description": "Campaign planning, content, and marketing operations.",
+      "status": "coming-soon",
+      "workflowPath": "",
+      "examplePrompts": []
+    },
+    {
+      "id": "investment",
+      "name": "Investment",
+      "description": "Investment research, analysis, and decision preparation.",
+      "status": "coming-soon",
+      "workflowPath": "",
+      "examplePrompts": []
+    },
+    {
+      "id": "bookkeeping",
+      "name": "Bookkeeping",
+      "description": "Bookkeeping preparation, review, and reconciliation support.",
+      "status": "coming-soon",
+      "workflowPath": "",
+      "examplePrompts": []
+    }
+  ]
+}

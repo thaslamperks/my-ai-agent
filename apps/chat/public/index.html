@@ -1,0 +1,438 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="A private, local workspace for reusable business agents."
+    />
+    <title>Project Manager</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/agent.config.js" defer></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#message-input">Skip to message box</a>
+
+    <main class="app-shell">
+      <aside class="agent-panel" id="agent-panel" aria-labelledby="agent-name">
+        <button class="history-close" id="history-close" type="button">
+          <span aria-hidden="true">×</span>
+          <span class="visually-hidden">Close chat history</span>
+        </button>
+        <div>
+          <div class="brand">
+            <span class="brand__mark" id="agent-initials" aria-hidden="true">PM</span>
+            <div>
+              <p class="brand__eyebrow">My local agent</p>
+              <h1 id="agent-name">Project Manager</h1>
+            </div>
+          </div>
+
+          <p class="agent-panel__subtitle" id="agent-subtitle">
+            Turn meetings, documents, and project ideas into clear next actions.
+          </p>
+
+          <div class="local-status">
+            <span class="local-status__dot" aria-hidden="true"></span>
+            <span>Local app · responses use your Claude API</span>
+          </div>
+        </div>
+
+        <section class="agent-selector" aria-labelledby="agent-selector-title">
+          <p class="section-label" id="agent-selector-title">Agents</p>
+          <div class="agent-list" id="agent-list" role="list"></div>
+        </section>
+
+        <section class="history-panel" aria-labelledby="history-title">
+          <div class="history-panel__header">
+            <p class="section-label" id="history-title">Chats</p>
+            <button class="history-new" id="history-new" type="button">
+              New
+            </button>
+          </div>
+          <form class="history-search" id="history-search-form" role="search">
+            <label class="visually-hidden" for="history-search-input">
+              Search saved chats
+            </label>
+            <input
+              id="history-search-input"
+              type="search"
+              maxlength="200"
+              placeholder="Search chats"
+              autocomplete="off"
+            />
+          </form>
+          <p class="history-status" id="history-status" aria-live="polite"></p>
+          <div class="history-list" id="history-list" role="list"></div>
+          <button class="history-more" id="history-more" type="button" hidden>
+            Load more
+          </button>
+        </section>
+
+        <p class="privacy-note">
+          <span aria-hidden="true">✦</span>
+          Chats are saved locally in plaintext. Prompts and relevant file text
+          are sent to Claude when you ask the agent.
+        </p>
+      </aside>
+
+      <section class="chat-card" aria-labelledby="conversation-title">
+        <header class="chat-header">
+          <div class="chat-header__identity">
+            <span class="mobile-mark" id="mobile-agent-initials" aria-hidden="true">
+              PM
+            </span>
+            <div>
+              <p class="chat-header__kicker">Conversation · <span id="conversation-agent-name">Project Manager</span></p>
+              <h2 id="conversation-title"><span id="conversation-title-text">New conversation</span></h2>
+            </div>
+          </div>
+
+          <div class="chat-header__actions">
+            <button
+              class="history-button"
+              id="history-button"
+              type="button"
+              aria-controls="agent-panel"
+              aria-expanded="false"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M5 6h14M5 12h14M5 18h9" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" />
+              </svg>
+              <span class="visually-hidden">Open chat history</span>
+            </button>
+            <button class="reset-button" id="reset-button" type="button">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M4.93 4.93a10 10 0 1 1-1.79 11.46M3 8V3m0 0h5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.8"
+                />
+              </svg>
+              <span>New conversation</span>
+            </button>
+          </div>
+        </header>
+
+        <div
+          class="conversation"
+          id="conversation"
+          role="log"
+          aria-live="polite"
+          aria-relevant="additions"
+          aria-busy="false"
+          tabindex="-1"
+        ></div>
+
+        <div class="composer-area">
+          <section class="suggestions" id="suggestions" aria-labelledby="suggestions-title">
+            <p class="section-label" id="suggestions-title">Try an example</p>
+            <div class="suggestion-list" id="suggestion-list"></div>
+          </section>
+
+          <form class="composer" id="chat-form">
+            <label class="visually-hidden" for="message-input">
+              Message your project manager
+            </label>
+            <div class="composer__field">
+              <div
+                class="document-list"
+                id="document-list"
+                aria-label="Attachments for the next message"
+                aria-live="polite"
+              ></div>
+              <textarea
+                id="message-input"
+                name="message"
+                rows="2"
+                maxlength="8000"
+                placeholder="What should the Project Manager do?"
+                autocomplete="off"
+                required
+              ></textarea>
+              <div class="composer__toolbar">
+                <div class="attachment-picker">
+                  <button
+                    class="attachment-button"
+                    id="attachment-menu-button"
+                    type="button"
+                    aria-label="Add an attachment"
+                    aria-haspopup="menu"
+                    aria-controls="attachment-menu"
+                    aria-expanded="false"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        d="M12 5v14M5 12h14"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-linecap="round"
+                        stroke-width="1.8"
+                      />
+                    </svg>
+                  </button>
+                  <div
+                    class="attachment-menu"
+                    id="attachment-menu"
+                    role="menu"
+                    aria-label="Add context"
+                    hidden
+                  >
+                    <button
+                      class="attachment-menu__item"
+                      id="upload-button"
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span class="attachment-menu__icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                          <path
+                            d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Zm0 0v5h5M9 14h6m-6 3h4"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.7"
+                          />
+                        </svg>
+                      </span>
+                      <span>
+                        <strong>Upload a file</strong>
+                        <small>PDF, DOCX or TXT</small>
+                      </span>
+                    </button>
+                    <button
+                      class="attachment-menu__item"
+                      id="paste-button"
+                      type="button"
+                      role="menuitem"
+                    >
+                      <span class="attachment-menu__icon" aria-hidden="true">
+                        <svg viewBox="0 0 24 24">
+                          <path
+                            d="M9 5h6m-7 2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-2m3-9v6m-3-3h6M9 3h6v4H9V3Z"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.7"
+                          />
+                        </svg>
+                      </span>
+                      <span>
+                        <strong>Paste long text</strong>
+                        <small>Transcript or meeting notes</small>
+                      </span>
+                    </button>
+                  </div>
+                </div>
+                <p class="document-status" id="document-status" role="status"></p>
+                <span
+                  class="character-count"
+                  id="character-count"
+                  aria-hidden="true"
+                >
+                  0 / 8000
+                </span>
+              </div>
+              <input
+                id="file-input"
+                type="file"
+                accept=".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                hidden
+              />
+            </div>
+            <button class="send-button" id="send-button" type="submit">
+              <span id="send-button-label">Send</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="m5 12 14-7-4.5 14-2.8-5.7L5 12Z"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="1.8"
+                />
+              </svg>
+            </button>
+          </form>
+
+          <div class="composer-meta">
+            <p id="request-status" role="status" aria-live="polite">
+              Press Enter to send · Shift + Enter for a new line
+            </p>
+            <p>Local workshop build</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <dialog class="paste-dialog" id="paste-dialog">
+      <form class="paste-dialog__card" id="paste-form">
+        <div>
+          <p class="section-label">Add pasted context</p>
+          <h2>Paste a transcript or document</h2>
+          <p>
+            The text is prepared locally and sent to Claude with your next
+            request.
+          </p>
+        </div>
+        <label for="pasted-name">Document name</label>
+        <input
+          id="pasted-name"
+          name="pasted-name"
+          maxlength="120"
+          value="Pasted transcript"
+        />
+        <label for="pasted-text">Text</label>
+        <textarea
+          id="pasted-text"
+          name="pasted-text"
+          maxlength="150000"
+          rows="12"
+          placeholder="Paste up to 150,000 characters here…"
+          required
+        ></textarea>
+        <div class="paste-dialog__actions">
+          <button class="secondary-button" id="paste-cancel" type="button">
+            Cancel
+          </button>
+          <button class="send-button" type="submit">Add context</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="paste-dialog profile-dialog" id="profile-dialog">
+      <form class="paste-dialog__card" id="profile-form">
+        <div>
+          <p class="section-label">Agent details</p>
+          <h2 id="profile-dialog-title">Teach the agent about you</h2>
+          <p>
+            Saved on this computer. The agent uses these details in every draft
+            it writes, instead of guessing.
+          </p>
+        </div>
+
+        <p class="profile-warning">
+          These answers are saved in your project folder. Remove customer names
+          and contact details from anything you paste here.
+        </p>
+
+        <div class="profile-identity">
+          <span class="profile-avatar" id="profile-avatar-preview" aria-hidden="true"></span>
+          <div class="profile-identity__fields">
+            <label for="profile-agent-name">What is this agent called?</label>
+            <input
+              id="profile-agent-name"
+              name="profile-agent-name"
+              maxlength="80"
+              placeholder="Sales"
+              autocomplete="off"
+            />
+            <label for="profile-avatar">Picture (optional)</label>
+            <input
+              id="profile-avatar"
+              type="file"
+              accept="image/png,image/jpeg,image/webp,image/gif"
+            />
+            <button
+              class="secondary-button profile-avatar__clear"
+              id="profile-avatar-clear"
+              type="button"
+            >
+              Remove picture
+            </button>
+          </div>
+        </div>
+
+        <label for="profile-tone">How do you want it to sound?</label>
+        <textarea
+          id="profile-tone"
+          name="profile-tone"
+          maxlength="400"
+          rows="2"
+          placeholder="Warm but straight to the point. No jargon. I never use exclamation marks."
+        ></textarea>
+
+        <label for="profile-sells">What does your business sell?</label>
+        <textarea
+          id="profile-sells"
+          name="profile-sells"
+          maxlength="300"
+          rows="2"
+          placeholder="Wedding and family photography across Victoria."
+        ></textarea>
+
+        <label for="profile-price">Your typical price or day rate</label>
+        <textarea
+          id="profile-price"
+          name="profile-price"
+          maxlength="300"
+          rows="2"
+          placeholder="Full day from $2,400. Half day $1,400. Albums from $600."
+        ></textarea>
+
+        <label for="profile-hours">Lead time, availability, and working hours</label>
+        <textarea
+          id="profile-hours"
+          name="profile-hours"
+          maxlength="200"
+          rows="2"
+          placeholder="Booked 3 to 6 months ahead. I reply Monday to Thursday."
+        ></textarea>
+
+        <label for="profile-terms">Deposit, cancellation, or refund terms</label>
+        <textarea
+          id="profile-terms"
+          name="profile-terms"
+          maxlength="400"
+          rows="2"
+          placeholder="30% deposit to hold the date, refundable up to 60 days before."
+        ></textarea>
+
+        <label for="profile-sample-1">
+          An email you sent that worked (this teaches it your voice)
+        </label>
+        <textarea
+          id="profile-sample-1"
+          name="profile-sample-1"
+          maxlength="1500"
+          rows="6"
+          placeholder="Paste a real email you wrote, with names removed."
+        ></textarea>
+
+        <label for="profile-sample-2">A second example (optional)</label>
+        <textarea
+          id="profile-sample-2"
+          name="profile-sample-2"
+          maxlength="1500"
+          rows="6"
+          placeholder="Another one, with names removed."
+        ></textarea>
+
+        <label for="profile-win">A job that went well, and why you won it</label>
+        <textarea
+          id="profile-win"
+          name="profile-win"
+          maxlength="800"
+          rows="4"
+          placeholder="Booked a 130-guest wedding at Coombe Lodge. They chose me because I offered fast family group shots."
+        ></textarea>
+
+        <p class="profile-status" id="profile-status" role="status" aria-live="polite"></p>
+
+        <div class="paste-dialog__actions">
+          <button class="secondary-button" id="profile-cancel" type="button">
+            Cancel
+          </button>
+          <button class="send-button" id="profile-save" type="submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
