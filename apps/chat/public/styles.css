@@ -102,6 +102,14 @@ textarea:focus-visible,
     var(--panel);
 }
 
+/* The panel is a column flexbox that scrolls as a whole. Its sections must keep
+   their content height: with the default flex-shrink they collapse when the
+   panel runs short and, being overflow: visible, spill over the sections below
+   instead of scrolling. */
+.agent-panel > * {
+  flex-shrink: 0;
+}
+
 .history-close {
   display: none;
 }
@@ -285,7 +293,6 @@ textarea:focus-visible,
 }
 
 .agent-selector {
-  min-height: 0;
   margin: 1.5rem 0 1rem;
 }
 
@@ -389,7 +396,6 @@ textarea:focus-visible,
 }
 
 .history-panel {
-  min-height: 0;
   padding-top: 1rem;
   border-top: 1px solid rgb(83 62 135 / 10%);
 }
