@@ -117,6 +117,9 @@ const workflowIds = {
     "phase11StartPaidDomainResearch",
     "phase11CompletePaidDomainResearch",
     "phase11GetPaidDomainResearch",
+    "phase13StartSeoArticle",
+    "phase13WriteSeoArticle",
+    "phase13GetSeoArticle",
   ],
 };
 
@@ -140,6 +143,9 @@ const exportedWorkflowFiles = [
     "54-tool-complete-paid-domain-research.json",
   ],
   ["phase11GetPaidDomainResearch", "55-tool-get-paid-domain-research.json"],
+  ["phase13StartSeoArticle", "56-tool-start-seo-article.json"],
+  ["phase13WriteSeoArticle", "57-internal-write-seo-article.json"],
+  ["phase13GetSeoArticle", "58-tool-get-seo-article.json"],
   ["phase3AgentHealth", "90-debug-agent-health.json"],
 ];
 
@@ -1678,7 +1684,7 @@ function sqliteQuickCheck(databasePath) {
 // memory tables. Version 3 adds the paid domain-research snapshot table. The
 // store migrates an older database forward on open, so an older but supported
 // version is healthy rather than a failure.
-const SUPPORTED_CHAT_SCHEMA_VERSIONS = [1, 2, 3];
+const SUPPORTED_CHAT_SCHEMA_VERSIONS = [1, 2, 3, 4, 5];
 
 function chatSchemaIsSupported(check) {
   return (

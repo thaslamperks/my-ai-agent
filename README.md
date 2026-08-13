@@ -17,6 +17,7 @@ In about 30 minutes you will have:
 - PDF, DOCX, TXT, and long-transcript input.
 - Local project tasks and conversation memory.
 - Editable Markdown skills.
+- Background SEO article drafts grounded in saved research and verified public sources.
 - Confirmation-gated task creation and status changes.
 
 Everything runs locally as ordinary Node.js processes. Nothing is deployed to the cloud in this release.
@@ -211,7 +212,7 @@ Reset asks you to type `RESET`. The [operations and recovery guide](docs/LOCAL_O
 - A checksum-verified Node.js 24.18.0 and npm 11.16.0 bootstrap for macOS and Windows, stored only inside `.runtime/` when the computer needs it.
 - The exact pinned n8n release, installed with npm and kept in this project's folder.
 - A TypeScript chat gateway, custom browser interface, and isolated document reader.
-- Eleven reviewed n8n workflows, including the visual learner checklist.
+- Twenty reviewed n8n workflows, including the visual learner checklist, the free and paid domain-research paths, and the background SEO article writer.
 - Durable local SQLite chat history with browsing, full-text search, rename,
   deletion, and restart-safe bounded conversation memory.
 - Four local Data Tables for tasks, audits, pending confirmations, and enabled skills.
@@ -236,6 +237,7 @@ multi-user authentication, RAG, queues, and autonomous background work.
 - [Detailed local setup](docs/LOCAL_SETUP.md)
 - [GitHub Desktop workflow](docs/GITHUB_DESKTOP.md)
 - [Connect the visual agent to Claude](docs/N8N_AGENT_SETUP.md)
+- [Create grounded SEO article drafts](docs/SEO_ARTICLE_WRITER.md)
 - [Customise the chat](docs/CUSTOMISE_CHAT.md)
 - [Customise Markdown skills](docs/CUSTOMISE_SKILLS.md)
 - [Use documents and long transcripts](docs/DOCUMENT_UPLOADS.md)

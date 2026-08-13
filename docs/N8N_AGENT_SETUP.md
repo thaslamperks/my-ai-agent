@@ -134,6 +134,8 @@ Open `00 - START HERE - Project Partner`. The sticky notes describe the read, pr
 | **start_domain_research** | Starts one explicitly authorised public-domain research job and binds it to this conversation |
 | **complete_domain_research** | Checks that bound job and saves only completed or partial results to local SQLite memory |
 | **get_business_memory** | Reads saved company, competitor, keyword, source, and warning facts |
+| **start_seo_article** | Queue a grounded review draft from saved domain research; makes no new paid SEO call and never publishes |
+| **get_seo_article** | Check a conversation-bound article job and get its local Markdown download when ready |
 | **Confirm Stored Action** | Calls the deterministic confirmation workflow before either write worker |
 | **Return Agent Reply** | Returns only `sessionId`, `reply`, and `runId` |
 | **Return Invalid Request** | Returns a safe 400 or 413 response without calling Claude |

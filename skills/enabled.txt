@@ -7,3 +7,5 @@ linkedin-profile-lookup
 linkedin-prospect-search
 domain-research
 paid-domain-research
+my-business
+seo-article-writer

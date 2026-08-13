@@ -17,9 +17,15 @@ This directory contains portable workflow exports for the local AI agent.
 | `workflows/50-tool-start-domain-research.json` | Starts authorised public-domain research and binds its job ID to the current conversation |
 | `workflows/51-tool-complete-domain-research.json` | Reports what one conversation-bound research job saved, without researching again |
 | `workflows/52-tool-get-business-memory.json` | Reads saved company, competitor, keyword, source, and warning data from local memory |
+| `workflows/53-tool-start-paid-domain-research.json` | Runs one consent-gated, cost-bounded DataForSEO research pipeline and saves an evidence snapshot |
+| `workflows/54-tool-complete-paid-domain-research.json` | Reads one exact conversation-bound paid attempt without another provider call |
+| `workflows/55-tool-get-paid-domain-research.json` | Reads the latest successful paid SEO snapshot and historical attempts |
+| `workflows/56-tool-start-seo-article.json` | Validates one article brief and queues the background writer; makes no provider purchase |
+| `workflows/57-internal-write-seo-article.json` | Background-only compiler that fetches verified public sources and drafts the reviewed Markdown article |
+| `workflows/58-tool-get-seo-article.json` | Reads the status and latest saved draft for one article job |
 | `workflows/90-debug-agent-health.json` | Exposes a safe local health response without secrets |
 
-The workflow exports contain a credential reference named `Anthropic account`, but no API keys. After import, create or select the real credential inside n8n. Workflows `00` and `50` each need it selected once.
+The workflow exports contain credential references named `Anthropic account` and `DataForSEO API`, but no API keys or credential secrets. After import, create or select the real credential inside n8n. Workflows `00`, `50`, and `57` each need `Anthropic account` selected once; workflow `53` uses the `DataForSEO API` Basic Auth credential.
 
 Use the repository import script rather than editing JSON by hand:
 
