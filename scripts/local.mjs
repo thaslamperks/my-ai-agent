@@ -114,6 +114,9 @@ const workflowIds = {
     "phase9StartDomainResearch",
     "phase9CompleteDomainResearch",
     "phase9GetBusinessMemory",
+    "phase11StartPaidDomainResearch",
+    "phase11CompletePaidDomainResearch",
+    "phase11GetPaidDomainResearch",
   ],
 };
 
@@ -131,6 +134,12 @@ const exportedWorkflowFiles = [
   ["phase9StartDomainResearch", "50-tool-start-domain-research.json"],
   ["phase9CompleteDomainResearch", "51-tool-complete-domain-research.json"],
   ["phase9GetBusinessMemory", "52-tool-get-business-memory.json"],
+  ["phase11StartPaidDomainResearch", "53-tool-start-paid-domain-research.json"],
+  [
+    "phase11CompletePaidDomainResearch",
+    "54-tool-complete-paid-domain-research.json",
+  ],
+  ["phase11GetPaidDomainResearch", "55-tool-get-paid-domain-research.json"],
   ["phase3AgentHealth", "90-debug-agent-health.json"],
 ];
 
@@ -1666,9 +1675,10 @@ function sqliteQuickCheck(databasePath) {
 
 // Chat store schema versions this release understands. Version 1 is the
 // original transcript schema; version 2 adds the domain-research business
-// memory tables. The store migrates an older database forward on open, so an
-// older but supported version is healthy rather than a failure.
-const SUPPORTED_CHAT_SCHEMA_VERSIONS = [1, 2];
+// memory tables. Version 3 adds the paid domain-research snapshot table. The
+// store migrates an older database forward on open, so an older but supported
+// version is healthy rather than a failure.
+const SUPPORTED_CHAT_SCHEMA_VERSIONS = [1, 2, 3];
 
 function chatSchemaIsSupported(check) {
   return (
@@ -1922,7 +1932,7 @@ async function commandDiagnose() {
   };
 
   print("AI Solopreneur diagnostics");
-  print("This check never calls Claude or displays credential values.\n");
+  print("This check never calls Claude or DataForSEO and never displays credential values.\n");
 
   ok(`Node.js ${process.versions.node} is available.`);
 
@@ -2046,6 +2056,39 @@ async function commandDiagnose() {
         ok("An Anthropic credential exists and is selected by the Claude node.");
       } else {
         action("Create an Anthropic credential named Anthropic account and select it in Claude - Sonnet 4.6.");
+      }
+
+      const paidWorkflow = exportedWorkflow("phase11StartPaidDomainResearch");
+      const dataForSeoCredentialExport = tmpPath("diagnostic-dataforseo-credentials.json");
+      let dataForSeoCredentialSelected = false;
+      try {
+        const result = runN8nCli(
+          ["export:credentials", "--all", `--output=${dataForSeoCredentialExport}`],
+          { capture: true },
+        );
+        if (result.status === 0 && paidWorkflow !== null) {
+          const reference = paidWorkflow.nodes?.find(
+            (node) => node.name === "DataForSEO Ranked Keywords",
+          )?.credentials?.httpBasicAuth;
+          const credentials = readExportedRows(dataForSeoCredentialExport);
+          dataForSeoCredentialSelected = Boolean(
+            reference?.id &&
+              credentials.some(
+                (credential) =>
+                  credential.id === reference.id &&
+                  credential.type === "httpBasicAuth",
+              ),
+          );
+        }
+      } catch {
+        dataForSeoCredentialSelected = false;
+      } finally {
+        rmSync(dataForSeoCredentialExport, { force: true });
+      }
+      if (dataForSeoCredentialSelected) {
+        ok("A DataForSEO Basic Auth credential is selected by the paid research workflow.");
+      } else {
+        action("Create an HTTP Basic Auth credential named DataForSEO API with your API login and API password, then select it on every DataForSEO node in workflow 53.");
       }
     }
 

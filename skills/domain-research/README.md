@@ -1,8 +1,10 @@
-# Domain Research Memory (optional skill)
+# Domain Research Memory (optional, free skill)
 
-Point the agent at a website you own. It reads your public home page, works out what your business appears to offer and to whom, suggests who you compete with and what people might search for, and saves all of it on your computer so later conversations can use it without you pasting anything again.
+Point the agent at a business website. It reads the public home page, works out what that business appears to offer and to whom, suggests who it competes with and what people might search for, and saves all of it on your computer so later conversations can use it without you pasting anything again.
 
-Best for: writing your own marketing copy, sanity-checking how your site reads to a stranger, and getting a first list of search terms to look into properly.
+This is the **free** version, and it costs nothing to run. It is used when you ask for free research, and automatically when the paid `paid-domain-research` skill is unavailable or comes back without useful search data. An ordinary research request goes to the paid skill first — see [`../paid-domain-research/README.md`](../paid-domain-research/README.md).
+
+Best for: writing your own marketing copy, sanity-checking how a site reads to a stranger, and getting a first list of search terms to look into properly.
 
 ## Before you start
 
@@ -30,14 +32,12 @@ You also need the Anthropic credential you created for workflow `00`. Domain res
 Paste this into the chat, with your own domain in place of `yourbusiness.com`:
 
 ```text
-Please research yourbusiness.com.
+Please do free research on yourbusiness.com.
 ```
 
-The agent will ask whether you own the domain or are allowed to research it. That question is deliberate and it will not start until you answer it. Reply:
+Say **free** if you want this website-only version. Without that word, the agent uses the paid skill first and only falls back here if the paid data does not arrive.
 
-```text
-Yes, I own it and I authorise you to research it.
-```
+The agent will not ask whether you own the domain. Asking for the research is enough.
 
 Then **wait**. The research takes up to a minute: it reads your page, analyses it, and saves the result, all in one step. The chat will look idle while that happens. Do not send the message again.
 
@@ -77,7 +77,7 @@ Most competitors come back as inference. That is expected and honest. Treat them
 - It has **no search engine and no keyword tool**. The seed keywords are suggestions from your page and from general knowledge. They carry **no search volumes and no difficulty scores**, because nothing here can measure those. Take them to a real keyword tool before you plan anything around them.
 - It cannot read a site that builds its content with JavaScript after loading. If your page comes back nearly empty, that is usually why, and the result is saved as `partial` with a warning.
 - It will not invent a company, a domain, or a statistic to fill a gap. Fewer entries is the intended behaviour.
-- It will not research a domain you have not said you are allowed to research, and a link or a document does not count as permission.
+- It only acts on what you ask for now. A domain found in an uploaded document, an old message, or saved research does not start a scan by itself.
 - It only researches public business domains. Internal addresses, IP addresses, and `localhost` are refused.
 
 ## When something goes wrong

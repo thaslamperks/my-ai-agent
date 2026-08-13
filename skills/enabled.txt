@@ -6,3 +6,4 @@ weekly-status
 linkedin-profile-lookup
 linkedin-prospect-search
 domain-research
+paid-domain-research

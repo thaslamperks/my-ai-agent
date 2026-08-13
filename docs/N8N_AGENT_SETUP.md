@@ -46,9 +46,9 @@ If macOS blocks it, Control-click the file, choose **Open**, then confirm.
 
 Double-click `import-workflows-windows.cmd`.
 
-The fallback opens a terminal, checks the workflows and Markdown skills, starts n8n if needed, and imports all fourteen workflows. It briefly enables localhost-only setup endpoints to create local tables and sync enabled skills, then immediately removes both endpoints. It publishes the reviewed runtime subworkflows but does not publish the main agent, health workflow, or an API key.
+The fallback opens a terminal, checks the workflows and Markdown skills, starts n8n if needed, and imports all seventeen workflows. It briefly enables localhost-only setup endpoints to create local tables and sync enabled skills, then immediately removes both endpoints. It publishes the reviewed runtime subworkflows but does not publish the main agent, health workflow, or an API key.
 
-Refresh the n8n Overview. All fourteen workflows should appear:
+Refresh the n8n Overview. All seventeen workflows should appear:
 
 - `00 - START HERE - Project Partner`
 - `01 - START HERE - Learner Checklist`
@@ -63,9 +63,12 @@ Refresh the n8n Overview. All fourteen workflows should appear:
 - `50 - TOOL - start_domain_research`
 - `51 - TOOL - complete_domain_research`
 - `52 - TOOL - get_business_memory`
+- `53 - TOOL - start_paid_domain_research`
+- `54 - TOOL - complete_paid_domain_research`
+- `55 - TOOL - get_paid_domain_research`
 - `90 - DEBUG - Agent Health`
 
-The nine runtime dependencies—task read tool, two proposal tools, confirmation dispatcher, two task write workers, and three domain-research tools—are published automatically. The task write workers are callable only by workflow `40`; no AI Tool node points to them. The main agent, health workflow, and two temporary setup workflows remain inactive drafts. The learner checklist is an inactive visual guide that can be opened or run manually.
+The twelve runtime dependencies—task read tool, two proposal tools, confirmation dispatcher, two task write workers, three free domain-research tools, and three paid domain-research tools—are published automatically. The task write workers are callable only by workflow `40`; no AI Tool node points to them. The main agent, health workflow, and two temporary setup workflows remain inactive drafts. The learner checklist is an inactive visual guide that can be opened or run manually.
 
 Open **Data tables** in n8n:
 
