@@ -80,6 +80,11 @@ Then validate:
 node scripts/validate-workflows.mjs
 ```
 
+A brand-new workflow file also needs to be added to `expectedFiles` in
+`scripts/validate-workflows.mjs`, and to `workflowIds` and
+`exportedWorkflowFiles` in `scripts/local.mjs` so that import and publish pick
+it up. Validation fails until the exported file list and the validator agree.
+
 Start the local project and manually exercise every affected path with non-secret
 sample input. For a write path, check altered, cross-conversation, expired,
 superseded, repeated, and simultaneous confirmations before sharing the change.

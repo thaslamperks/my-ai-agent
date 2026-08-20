@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { lookup } from "node:dns";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import {
@@ -8,6 +9,8 @@ import {
   type Server,
   type ServerResponse,
 } from "node:http";
+import { request as httpsRequest } from "node:https";
+import { isIP, type LookupFunction } from "node:net";
 import { basename, extname, resolve, sep } from "node:path";
 import Busboy from "busboy";
 import {
@@ -24,15 +27,39 @@ import {
 } from "./documents.js";
 import {
   ChatStore,
+  type BusinessMemoryInput,
   type HistoryMessage,
+  type PaidComponentStatus,
+  type SeoArticleJobInput,
+  type SeoArticleJobStatus,
+  type SeoArticleVersionInput,
+  type SeoSnapshotInput,
   type StoredAttachment,
 } from "./chat-store.js";
-import { ProfileStore, ProfileValidationError } from "./profile.js";
+import {
+  createArticleBriefData,
+  refreshArticleBriefContext,
+  resolveArticleContext,
+  selectArticleOpportunity,
+  type ArticleContextOverrides,
+  type ArticleBriefRecord,
+} from "./article-brief.js";
+import {
+  emptyProfile,
+  ProfileStore,
+  ProfileValidationError,
+  type AgentProfile,
+} from "./profile.js";
+import { fetchPublicDomainPage, fetchPublicWebPages } from "./public-web.js";
+import { validateSeoArticleResult } from "./seo-article.js";
 
 const MAX_MESSAGE_LENGTH = 8_000;
 // A saved picture is base64 inside the JSON body, so this endpoint alone needs
 // more room than the 64 KB used by every other request.
 const MAX_PROFILE_REQUEST_BYTES = 512 * 1_024;
+const MAX_BUSINESS_MEMORY_REQUEST_BYTES = 256 * 1_024;
+const MAX_PAID_RESEARCH_REQUEST_BYTES = 1_024 * 1_024;
+const MAX_SEO_ARTICLE_REQUEST_BYTES = 1_024 * 1_024;
 const MAX_REQUEST_BYTES = 65_536;
 const MAX_UPSTREAM_BYTES = 65_536;
 const UUID_PATTERN =
@@ -59,6 +86,7 @@ type ErrorCode =
   | "AGENT_ERROR"
   | "AGENT_TIMEOUT"
   | "AGENT_UNAVAILABLE"
+  | "BUSINESS_MEMORY_ERROR"
   | "CHAT_HISTORY_ERROR"
   | "CONVERSATION_NOT_FOUND"
   | "DOCUMENT_ERROR"
@@ -70,6 +98,9 @@ type ErrorCode =
   | "MESSAGE_TOO_LONG"
   | "RATE_LIMITED"
   | "REQUEST_IN_PROGRESS"
+  | "RESEARCH_JOB_NOT_FOUND"
+  | "SEO_ARTICLE_ERROR"
+  | "SEO_ARTICLE_NOT_FOUND"
   | "TOO_MANY_DOCUMENTS"
   | "UNSUPPORTED_FILE_TYPE";
 
@@ -144,6 +175,22 @@ function sendJson(
     "Content-Type": "application/json; charset=utf-8",
   });
   response.end(payload);
+}
+
+function sendMarkdown(
+  response: ServerResponse,
+  markdown: string,
+  fileName: string,
+): void {
+  const safeName = fileName.replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "seo-article.md";
+  response.writeHead(200, {
+    ...SECURITY_HEADERS,
+    "Cache-Control": "no-store",
+    "Content-Disposition": `attachment; filename="${safeName.endsWith(".md") ? safeName : `${safeName}.md`}"`,
+    "Content-Length": Buffer.byteLength(markdown).toString(),
+    "Content-Type": "text/markdown; charset=utf-8",
+  });
+  response.end(markdown);
 }
 
 function sendError(response: ServerResponse, error: PublicError): void {
@@ -288,6 +335,496 @@ function validateChatRequest(
     agentId: agent.id,
     message,
     documentIds: rawDocumentIds,
+  };
+}
+
+function businessMemoryText(
+  value: unknown,
+  field: string,
+  maximumLength: number,
+): string {
+  if (typeof value !== "string" || value.length > maximumLength) {
+    throw new PublicError(
+      400,
+      "INVALID_REQUEST",
+      `The saved research has an invalid ${field}.`,
+    );
+  }
+  return value.trim();
+}
+
+function businessMemoryObject(
+  value: unknown,
+  field: string,
+): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new PublicError(
+      400,
+      "INVALID_REQUEST",
+      `The saved research has an invalid ${field}.`,
+    );
+  }
+  return value as Record<string, unknown>;
+}
+
+function businessMemoryObjectArray(
+  value: unknown,
+  field: string,
+  maximumItems: number,
+): Array<Record<string, unknown>> {
+  if (
+    !Array.isArray(value) ||
+    value.length > maximumItems ||
+    !value.every(
+      (item) => typeof item === "object" && item !== null && !Array.isArray(item),
+    )
+  ) {
+    throw new PublicError(
+      400,
+      "INVALID_REQUEST",
+      `The saved research has an invalid ${field}.`,
+    );
+  }
+  return value as Array<Record<string, unknown>>;
+}
+
+function businessMemoryStringArray(
+  value: unknown,
+  field: string,
+  maximumItems: number,
+  maximumItemLength: number,
+): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.length > maximumItems ||
+    !value.every((item) => typeof item === "string" && item.length <= maximumItemLength)
+  ) {
+    throw new PublicError(
+      400,
+      "INVALID_REQUEST",
+      `The saved research has an invalid ${field}.`,
+    );
+  }
+  return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function validateBusinessDomain(value: unknown): string {
+  if (typeof value !== "string") {
+    throw new PublicError(400, "INVALID_REQUEST", "The saved research has an invalid domain.");
+  }
+  const domain = value.trim().toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+  const labels = domain.split(".");
+  if (
+    domain.length > 253 ||
+    labels.length < 2 ||
+    labels.some((label) => !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label)) ||
+    /^(?:\d{1,3}\.){3}\d{1,3}$/.test(domain) ||
+    ["local", "internal", "localhost", "home", "lan"].includes(labels.at(-1) ?? "")
+  ) {
+    throw new PublicError(400, "INVALID_REQUEST", "The saved research has an invalid domain.");
+  }
+  return domain;
+}
+
+function validateBusinessMemory(body: unknown): BusinessMemoryInput {
+  const candidate = businessMemoryObject(body, "payload");
+  if (candidate.schemaVersion !== 1) {
+    throw new PublicError(400, "INVALID_REQUEST", "The saved research schema is not supported.");
+  }
+  if (candidate.status !== "completed" && candidate.status !== "partial") {
+    throw new PublicError(400, "INVALID_REQUEST", "Only completed research can be saved.");
+  }
+  const competitors = businessMemoryObject(candidate.competitors, "competitors");
+  const input: BusinessMemoryInput = {
+    schemaVersion: 1,
+    jobId: businessMemoryText(candidate.jobId, "job ID", 160),
+    status: candidate.status,
+    domain: validateBusinessDomain(candidate.domain),
+    companyOverview: businessMemoryText(candidate.companyOverview, "company overview", 60_000),
+    profile: businessMemoryObject(candidate.profile, "company profile"),
+    competitors: {
+      direct: businessMemoryObjectArray(competitors.direct, "direct competitors", 20),
+      seo: businessMemoryObjectArray(competitors.seo, "SEO competitors", 20),
+      adjacent: businessMemoryObjectArray(competitors.adjacent, "adjacent organizations", 20),
+    },
+    seedKeywords: businessMemoryStringArray(candidate.seedKeywords, "seed keywords", 100, 300),
+    keywordCandidates: businessMemoryObjectArray(candidate.keywordCandidates, "keyword candidates", 160),
+    keywordGroups: businessMemoryObjectArray(candidate.keywordGroups, "keyword groups", 20),
+    sources: businessMemoryObjectArray(candidate.sources, "sources", 60),
+    warnings: businessMemoryStringArray(candidate.warnings, "warnings", 40, 2_000),
+    researchSummary: businessMemoryText(candidate.researchSummary, "research summary", 20_000),
+    evidenceQuality: businessMemoryObject(candidate.evidenceQuality, "evidence quality"),
+  };
+  if (typeof candidate.researchedAt === "string" && !Number.isNaN(Date.parse(candidate.researchedAt))) {
+    input.researchedAt = new Date(candidate.researchedAt).toISOString();
+  }
+  if (!input.jobId) {
+    throw new PublicError(400, "INVALID_REQUEST", "The saved research has no job ID.");
+  }
+  return input;
+}
+
+function paidResearchNumber(
+  value: unknown,
+  field: string,
+  minimum: number,
+  maximum: number,
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum) {
+    throw new PublicError(400, "INVALID_REQUEST", `The paid research has an invalid ${field}.`);
+  }
+  return value;
+}
+
+function validateSeoSnapshot(body: unknown): SeoSnapshotInput {
+  const candidate = businessMemoryObject(body, "paid research snapshot");
+  if (candidate.schemaVersion !== 1) {
+    throw new PublicError(400, "INVALID_REQUEST", "The paid research schema is not supported.");
+  }
+  if (!(["completed", "partial", "failed"] as unknown[]).includes(candidate.status)) {
+    throw new PublicError(400, "INVALID_REQUEST", "The paid research has an invalid status.");
+  }
+  if (!(["refresh", "standard", "deep"] as unknown[]).includes(candidate.researchDepth)) {
+    throw new PublicError(400, "INVALID_REQUEST", "The paid research has an invalid depth.");
+  }
+  const componentCandidate = businessMemoryObject(candidate.componentStatus, "component status");
+  const componentEntries = Object.entries(componentCandidate);
+  const allowedComponentStatuses: readonly PaidComponentStatus[] = [
+    "success",
+    "no_results",
+    "failed",
+    "unavailable",
+    "skipped",
+  ];
+  if (
+    componentEntries.length > 20 ||
+    componentEntries.some(
+      ([key, value]) =>
+        !/^[a-z][a-z0-9_]{0,63}$/.test(key) ||
+        !allowedComponentStatuses.includes(value as PaidComponentStatus),
+    )
+  ) {
+    throw new PublicError(400, "INVALID_REQUEST", "The paid research has an invalid component status.");
+  }
+  const researchDepth = candidate.researchDepth as SeoSnapshotInput["researchDepth"];
+  const maximumCost = { refresh: 0.1, standard: 0.2, deep: 0.5 }[researchDepth];
+  const costLimitUsd = paidResearchNumber(candidate.costLimitUsd, "cost limit", 0, maximumCost);
+  if (candidate.device !== "desktop" && candidate.device !== "mobile") {
+    throw new PublicError(400, "INVALID_REQUEST", "The paid research has an invalid device.");
+  }
+  const input: SeoSnapshotInput = {
+    schemaVersion: 1,
+    jobId: businessMemoryText(candidate.jobId, "job ID", 160),
+    status: candidate.status as SeoSnapshotInput["status"],
+    researchDepth,
+    domain: validateBusinessDomain(candidate.domain),
+    locationCode: Math.trunc(paidResearchNumber(candidate.locationCode, "location", 1, 9_999_999)),
+    languageCode: businessMemoryText(candidate.languageCode, "language", 12).toLowerCase(),
+    device: candidate.device,
+    costLimitUsd,
+    // Record real provider cost even if it unexpectedly exceeds the intended cap.
+    actualCostUsd: paidResearchNumber(candidate.actualCostUsd, "actual cost", 0, 100),
+    componentStatus: Object.fromEntries(componentEntries) as Record<string, PaidComponentStatus>,
+    offeringProfile: businessMemoryObject(candidate.offeringProfile, "offering profile"),
+    rankedKeywords: businessMemoryObjectArray(candidate.rankedKeywords, "ranked keywords", 200),
+    keywordCandidates: businessMemoryObjectArray(candidate.keywordCandidates, "keyword candidates", 500),
+    selectedKeywords: businessMemoryObjectArray(candidate.selectedKeywords, "selected keywords", 100),
+    seoCompetitors: businessMemoryObjectArray(candidate.seoCompetitors, "SEO competitors", 100),
+    serpEvidence: businessMemoryObjectArray(candidate.serpEvidence, "SERP evidence", 100),
+    sources: businessMemoryObjectArray(candidate.sources, "paid research sources", 200),
+    warnings: businessMemoryStringArray(candidate.warnings, "paid research warnings", 100, 2_000),
+    evidenceSummary: businessMemoryObject(candidate.evidenceSummary, "evidence summary"),
+  };
+  if (!input.jobId || !/^[a-z]{2,3}(?:-[a-z]{2,4})?$/.test(input.languageCode)) {
+    throw new PublicError(400, "INVALID_REQUEST", "The paid research identity is invalid.");
+  }
+  if (typeof candidate.capturedAt === "string" && !Number.isNaN(Date.parse(candidate.capturedAt))) {
+    input.capturedAt = new Date(candidate.capturedAt).toISOString();
+  }
+  if (typeof candidate.expiresAt === "string" && !Number.isNaN(Date.parse(candidate.expiresAt))) {
+    input.expiresAt = new Date(candidate.expiresAt).toISOString();
+  }
+  return input;
+}
+
+function seoArticleUrlArray(value: unknown, field: string): string[] {
+  const urls = businessMemoryStringArray(value ?? [], field, 12, 2_000);
+  for (const raw of urls) {
+    let parsed: URL;
+    try {
+      parsed = new URL(raw);
+    } catch {
+      throw new PublicError(400, "INVALID_REQUEST", `The article request has an invalid ${field}.`);
+    }
+    if (parsed.protocol !== "https:" || parsed.username !== "" || parsed.password !== "") {
+      throw new PublicError(400, "INVALID_REQUEST", `The article request has an invalid ${field}.`);
+    }
+  }
+  return urls;
+}
+
+interface SeoArticleStartRequest {
+  sessionId: string;
+  requestId: string;
+  domain: string;
+  primaryKeyword: string;
+  selectionNumber?: number;
+  chooseStrongestKeyword: boolean;
+  supportingKeywords: string[];
+  context: ArticleContextOverrides;
+  goal: string;
+  sourceUrls: string[];
+}
+
+function validateSeoArticleStartRequest(body: unknown): SeoArticleStartRequest {
+  const candidate = businessMemoryObject(body, "article request");
+  const sessionId = validateSessionId(candidate.sessionId);
+  const requestId = validateSessionId(candidate.requestId);
+  const domain = validateBusinessDomain(candidate.domain);
+  const primaryKeyword = businessMemoryText(candidate.primaryKeyword ?? "", "primary keyword", 200);
+  const rawSelection = candidate.selectionNumber ?? candidate.articleChoice;
+  const selectionNumber = rawSelection === undefined || rawSelection === ""
+    ? undefined
+    : Number(rawSelection);
+  if (
+    selectionNumber !== undefined &&
+    (!Number.isInteger(selectionNumber) || selectionNumber < 1 || selectionNumber > 3)
+  ) {
+    throw new PublicError(400, "INVALID_REQUEST", "Choose article 1, 2 or 3.");
+  }
+  const supportingKeywords = businessMemoryStringArray(
+    candidate.supportingKeywords ?? [],
+    "supporting keywords",
+    20,
+    200,
+  );
+  const context: ArticleContextOverrides = {
+    who: businessMemoryText(
+      candidate.who ?? candidate.targetAudience ?? "",
+      "who the business helps",
+      1_000,
+    ),
+    offer: businessMemoryText(candidate.offer ?? "", "business offer", 1_000),
+    price: businessMemoryText(candidate.price ?? "", "pricing guidance", 1_000),
+    boundaries: businessMemoryText(candidate.boundaries ?? "", "business limits", 1_000),
+    voice: businessMemoryText(candidate.voice ?? "", "writing voice", 1_000),
+  };
+  return {
+    sessionId,
+    requestId,
+    domain,
+    primaryKeyword,
+    ...(selectionNumber === undefined ? {} : { selectionNumber }),
+    chooseStrongestKeyword: candidate.chooseStrongestKeyword === true,
+    supportingKeywords,
+    context,
+    goal: businessMemoryText(candidate.goal ?? "", "article goal", 1_000),
+    sourceUrls: seoArticleUrlArray(candidate.sourceUrls, "source URLs"),
+  };
+}
+
+function researchKeyForBrief(brief: ReturnType<typeof createArticleBriefData>): string {
+  if (brief === undefined) return "";
+  if (brief.research.snapshotId) return `snapshot:${brief.research.snapshotId}`;
+  return `memory:${brief.research.memoryJobId ?? brief.research.capturedAt}`;
+}
+
+function prepareArticleBrief(
+  chatStore: ChatStore,
+  sessionId: string,
+  domain: string,
+  profile: AgentProfile,
+  options: { paidOnly?: boolean; freeOnly?: boolean } = {},
+): ArticleBriefRecord | undefined {
+  const snapshot = options.freeOnly ? undefined : chatStore.getLatestSeoSnapshot(domain);
+  const memory = options.paidOnly ? undefined : chatStore.getBusinessMemory(domain);
+  const data = createArticleBriefData({
+    ...(snapshot === undefined ? {} : { snapshot }),
+    ...(memory === undefined ? {} : { memory }),
+    profile,
+  });
+  if (data === undefined) return undefined;
+  return chatStore.prepareArticleBrief(
+    sessionId,
+    domain,
+    researchKeyForBrief(data),
+    data,
+  );
+}
+
+function prepareSeoArticleJob(
+  chatStore: ChatStore,
+  request: SeoArticleStartRequest,
+  profile: AgentProfile,
+):
+  | { status: "needs_selection"; brief: ArticleBriefRecord; message: string }
+  | {
+      status: "needs_details";
+      brief: ArticleBriefRecord;
+      missingFields: string[];
+      message: string;
+    }
+  | { status: "ready"; brief: ArticleBriefRecord; jobInput: SeoArticleJobInput } {
+  let brief = chatStore.getLatestArticleBrief(request.sessionId, request.domain);
+  if (brief === undefined) {
+    brief = prepareArticleBrief(
+      chatStore,
+      request.sessionId,
+      request.domain,
+      profile,
+    );
+  }
+  if (brief === undefined) {
+    throw new PublicError(
+      422,
+      "SEO_ARTICLE_ERROR",
+      "I need to research this website before I can write a reliable article.",
+    );
+  }
+  const opportunity = selectArticleOpportunity(brief, {
+    primaryKeyword: request.primaryKeyword,
+    ...(request.selectionNumber === undefined
+      ? {}
+      : { selectionNumber: request.selectionNumber }),
+    chooseBest: request.chooseStrongestKeyword,
+  });
+  if (opportunity === undefined) {
+    return {
+      status: "needs_selection",
+      brief,
+      message: brief.opportunities.length > 0
+        ? "Choose article 1, 2 or 3, ask me to choose, or tell me another topic."
+        : "Tell me the article topic you want to write.",
+    };
+  }
+  const resolved = resolveArticleContext(brief, opportunity, request.context);
+  if (resolved.missingFields.length > 0) {
+    brief = chatStore.updateArticleBrief(request.sessionId, brief.briefId, {
+      status: "needs_details",
+      selection: opportunity,
+      context: resolved.context,
+      missingFields: resolved.missingFields,
+    });
+    return {
+      status: "needs_details",
+      brief,
+      missingFields: resolved.missingFields,
+      message: "I only need the missing business details shown here before I write.",
+    };
+  }
+  brief = chatStore.updateArticleBrief(request.sessionId, brief.briefId, {
+    status: "choosing",
+    selection: opportunity,
+    context: resolved.context,
+    missingFields: [],
+  });
+  const supportingKeywords = [
+    ...request.supportingKeywords,
+    ...opportunity.supportingKeywords,
+  ]
+    .filter(
+      (keyword, index, values) =>
+        keyword.toLowerCase() !== opportunity.primaryKeyword.toLowerCase() &&
+        values.findIndex((value) => value.toLowerCase() === keyword.toLowerCase()) === index,
+    )
+    .slice(0, 12);
+  return {
+    status: "ready",
+    brief,
+    jobInput: {
+      sessionId: request.sessionId,
+      requestId: request.requestId,
+      domain: request.domain,
+      briefId: brief.briefId,
+      primaryKeyword: opportunity.primaryKeyword,
+      supportingKeywords,
+      input: {
+        targetAudience: resolved.context.who.value,
+        offer: resolved.context.offer.value,
+        price: resolved.context.price.value,
+        boundaries: resolved.context.boundaries.value,
+        voice: resolved.context.voice.value,
+        goal: request.goal,
+        sourceUrls: request.sourceUrls,
+        requestedAt: new Date().toISOString(),
+      },
+    },
+  };
+}
+
+function validateSeoArticleJobUpdate(body: unknown): {
+  sessionId: string;
+  jobId: string;
+  status: SeoArticleJobStatus;
+  stage: string;
+  errorCode?: string;
+  errorMessage?: string;
+} {
+  const candidate = businessMemoryObject(body, "article job update");
+  const allowed: readonly SeoArticleJobStatus[] = [
+    "running",
+    "failed",
+    "interrupted",
+  ];
+  if (!allowed.includes(candidate.status as SeoArticleJobStatus)) {
+    throw new PublicError(400, "INVALID_REQUEST", "The article job has an invalid status.");
+  }
+  const errorCode = businessMemoryText(candidate.errorCode ?? "", "article error code", 100);
+  const errorMessage = businessMemoryText(candidate.errorMessage ?? "", "article error message", 2_000);
+  return {
+    sessionId: validateSessionId(candidate.sessionId),
+    jobId: businessMemoryText(candidate.jobId, "article job ID", 160),
+    status: candidate.status as SeoArticleJobStatus,
+    stage: businessMemoryText(candidate.stage, "article stage", 80),
+    ...(errorCode ? { errorCode } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
+  };
+}
+
+function articleVersionInput(
+  candidate: Record<string, unknown>,
+  primaryKeyword: string,
+  domain: string,
+  supportingKeywords: string[],
+): SeoArticleVersionInput {
+  let result;
+  try {
+    result = validateSeoArticleResult(candidate.result, primaryKeyword);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Invalid article result";
+    throw new PublicError(400, "INVALID_REQUEST", `The article result could not be saved: ${message}.`);
+  }
+  if (!result.qualityReport.passed) {
+    throw new PublicError(
+      422,
+      "SEO_ARTICLE_ERROR",
+      `The draft did not pass its final checks: ${result.qualityReport.errors.join(" ")}`,
+    );
+  }
+  return {
+    status: result.status,
+    domain,
+    primaryKeyword,
+    supportingKeywords,
+    context: businessMemoryObject(candidate.context ?? {}, "article context"),
+    plan: result.plan,
+    markdown: result.markdown,
+    structuredData: result.structuredData,
+    metadata: {
+      seoTitle: result.seoTitle,
+      metaDescription: result.metaDescription,
+      slug: result.slug,
+      canonicalSuggestion: result.canonicalSuggestion,
+      keywordMap: result.keywordMap,
+    },
+    answerBlocks: result.answerBlocks,
+    faq: result.faq,
+    sources: result.sources,
+    claimLedger: result.claims,
+    qualityReport: result.qualityReport as unknown as Record<string, unknown>,
+    warnings: [...result.warnings, ...result.qualityReport.warnings],
+    reviewStatus: result.reviewStatus,
+    model: result.model,
   };
 }
 
@@ -803,7 +1340,7 @@ export function createChatHandler(options: ChatGatewayOptions): RequestListener 
         try {
           if (request.method === "GET") {
             sendJson(response, 200, {
-              schemaVersion: 1,
+              schemaVersion: 2,
               profile: await profileStore.read(),
             });
             return;
@@ -827,7 +1364,7 @@ export function createChatHandler(options: ChatGatewayOptions): RequestListener 
             const saved = await profileStore.write(
               (body as Record<string, unknown>).profile ?? body,
             );
-            sendJson(response, 200, { schemaVersion: 1, profile: saved });
+            sendJson(response, 200, { schemaVersion: 2, profile: saved });
             return;
           }
           sendJson(
@@ -857,6 +1394,709 @@ export function createChatHandler(options: ChatGatewayOptions): RequestListener 
                 500,
                 "AGENT_ERROR",
                 "Your agent details could not be saved.",
+              ),
+            );
+          }
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/business-memory/jobs") {
+        try {
+          if (request.method === "GET") {
+            const sessionId = validateSessionId(
+              url.searchParams.get("sessionId"),
+            );
+            const jobId = businessMemoryText(
+              url.searchParams.get("jobId"),
+              "job ID",
+              160,
+            );
+            if (!jobId) {
+              throw new PublicError(
+                400,
+                "INVALID_REQUEST",
+                "The research job has no job ID.",
+              );
+            }
+            const job = chatStore.getDomainResearchJob(sessionId, jobId);
+            if (job === undefined) {
+              throw new PublicError(
+                404,
+                "RESEARCH_JOB_NOT_FOUND",
+                "That research job is not registered to this conversation.",
+              );
+            }
+            const memory = job.status === "completed" || job.status === "partial"
+              ? chatStore.getBusinessMemory(job.domain)
+              : undefined;
+            sendJson(response, 200, {
+              schemaVersion: 1,
+              job,
+              ...(memory === undefined ? {} : { memory }),
+            });
+            return;
+          }
+          if (request.method !== "POST") {
+            sendJson(
+              response,
+              405,
+              {
+                error: {
+                  code: "INVALID_REQUEST",
+                  message: "That method is not supported.",
+                },
+              },
+              { Allow: "GET, POST" },
+            );
+            return;
+          }
+          const candidate = businessMemoryObject(
+            await readRequestBody(request),
+            "job registration",
+          );
+          const sessionId = validateSessionId(candidate.sessionId);
+          const jobId = businessMemoryText(candidate.jobId, "job ID", 160);
+          const domain = validateBusinessDomain(candidate.domain);
+          if (!jobId) {
+            throw new PublicError(400, "INVALID_REQUEST", "The research job has no job ID.");
+          }
+          chatStore.registerDomainResearchJob(sessionId, jobId, domain);
+          sendJson(response, 201, {
+            schemaVersion: 1,
+            job: { jobId, sessionId, domain, status: "queued" },
+          });
+        } catch (error) {
+          if (error instanceof PublicError) {
+            sendError(response, error);
+          } else {
+            options.logError?.("Could not register the business research job", error);
+            sendError(
+              response,
+              new PublicError(
+                409,
+                "BUSINESS_MEMORY_ERROR",
+                "That research job could not be linked to this conversation.",
+              ),
+            );
+          }
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/public-domain-page") {
+        try {
+          if (request.method !== "POST") {
+            sendJson(
+              response,
+              405,
+              { error: { code: "INVALID_REQUEST", message: "That method is not supported." } },
+              { Allow: "POST" },
+            );
+            return;
+          }
+          const candidate = businessMemoryObject(
+            await readRequestBody(request),
+            "public domain request",
+          );
+          const domain = validateBusinessDomain(candidate.domain);
+          const page = await fetchPublicDomainPage(domain);
+          sendJson(response, 200, { schemaVersion: 1, domain, ...page });
+        } catch (error) {
+          if (error instanceof PublicError) {
+            sendError(response, error);
+          } else {
+            options.logError?.("Could not safely read the authorised public domain", error);
+            sendError(
+              response,
+              new PublicError(
+                502,
+                "BUSINESS_MEMORY_ERROR",
+                "The authorised public page could not be read safely.",
+              ),
+            );
+          }
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/public-research-pages") {
+        try {
+          if (request.method !== "POST") {
+            sendJson(
+              response,
+              405,
+              { error: { code: "INVALID_REQUEST", message: "That method is not supported." } },
+              { Allow: "POST" },
+            );
+            return;
+          }
+          const candidate = businessMemoryObject(
+            await readRequestBody(request, MAX_SEO_ARTICLE_REQUEST_BYTES),
+            "public research request",
+          );
+          const urls = seoArticleUrlArray(candidate.urls, "source URLs");
+          if (urls.length === 0) {
+            throw new PublicError(400, "INVALID_REQUEST", "Add at least one public source URL.");
+          }
+          const pages = await fetchPublicWebPages(urls);
+          sendJson(response, 200, { schemaVersion: 1, pages });
+        } catch (error) {
+          if (error instanceof PublicError) {
+            sendError(response, error);
+          } else {
+            options.logError?.("Could not safely read public research pages", error);
+            sendError(
+              response,
+              new PublicError(502, "SEO_ARTICLE_ERROR", "The public sources could not be read safely."),
+            );
+          }
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/seo-article/briefs") {
+        try {
+          if (request.method === "PATCH") {
+            const candidate = businessMemoryObject(
+              await readRequestBody(request, MAX_SEO_ARTICLE_REQUEST_BYTES),
+              "article plan update",
+            );
+            const sessionId = validateSessionId(candidate.sessionId);
+            const briefId = businessMemoryText(candidate.briefId, "article plan ID", 160);
+            const current = chatStore.getArticleBrief(sessionId, briefId);
+            if (current === undefined) {
+              throw new PublicError(
+                404,
+                "SEO_ARTICLE_NOT_FOUND",
+                "That article plan is not saved for this conversation.",
+              );
+            }
+            if (current.status === "choosing" || current.status === "needs_details") {
+              const refreshed = refreshArticleBriefContext(
+                current,
+                profileStore === undefined ? emptyProfile() : await profileStore.read(),
+              );
+              const brief = chatStore.updateArticleBrief(sessionId, briefId, {
+                status: refreshed.missingFields.length > 0 && current.selection !== undefined
+                  ? "needs_details"
+                  : "choosing",
+                context: refreshed.context,
+                missingFields: refreshed.missingFields,
+              });
+              sendJson(response, 200, { schemaVersion: 1, brief });
+              return;
+            }
+            sendJson(response, 200, { schemaVersion: 1, brief: current });
+            return;
+          }
+          if (request.method !== "GET") {
+            sendJson(
+              response,
+              405,
+              { error: { code: "INVALID_REQUEST", message: "That method is not supported." } },
+              { Allow: "GET, PATCH" },
+            );
+            return;
+          }
+          const sessionId = validateSessionId(url.searchParams.get("sessionId"));
+          const requestedDomain = url.searchParams.get("domain");
+          const brief = chatStore.getLatestArticleBrief(
+            sessionId,
+            requestedDomain === null ? undefined : validateBusinessDomain(requestedDomain),
+          );
+          if (brief === undefined) {
+            throw new PublicError(
+              404,
+              "SEO_ARTICLE_NOT_FOUND",
+              "There is no article plan in this conversation yet.",
+            );
+          }
+          const job = brief.linkedJobId
+            ? chatStore.getSeoArticleJob(sessionId, brief.linkedJobId)
+            : undefined;
+          const version = job?.latestVersionId
+            ? chatStore.getSeoArticleVersionForJob(sessionId, job.jobId, job.latestVersionId)
+            : undefined;
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            brief: {
+              briefId: brief.briefId,
+              domain: brief.domain,
+              status: brief.status,
+              opportunities: brief.opportunities,
+              context: brief.context,
+              selection: brief.selection,
+              missingFields: brief.missingFields,
+              research: {
+                source: brief.research.source,
+                capturedAt: brief.research.capturedAt,
+                status: brief.research.status,
+                warnings: brief.research.warnings,
+              },
+              createdAt: brief.createdAt,
+              updatedAt: brief.updatedAt,
+            },
+            ...(job === undefined ? {} : { job }),
+            ...(version === undefined
+              ? {}
+              : {
+                  article: {
+                    status: version.status,
+                    metadata: version.metadata,
+                    warnings: version.warnings,
+                    createdAt: version.createdAt,
+                    downloadUrl: `/api/seo-article/download/${version.downloadToken}.md`,
+                  },
+                }),
+          });
+        } catch (error) {
+          if (error instanceof PublicError) sendError(response, error);
+          else {
+            options.logError?.("Could not read the article plan", error);
+            sendError(
+              response,
+              new PublicError(500, "SEO_ARTICLE_ERROR", "The article plan could not be loaded."),
+            );
+          }
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/seo-article/jobs") {
+        try {
+          if (request.method === "POST") {
+            const startRequest = validateSeoArticleStartRequest(
+              await readRequestBody(request, MAX_SEO_ARTICLE_REQUEST_BYTES),
+            );
+            const prepared = prepareSeoArticleJob(
+              chatStore,
+              startRequest,
+              profileStore === undefined ? emptyProfile() : await profileStore.read(),
+            );
+            if (prepared.status !== "ready") {
+              sendJson(response, 200, {
+                schemaVersion: 1,
+                status: prepared.status,
+                message: prepared.message,
+                brief: {
+                  briefId: prepared.brief.briefId,
+                  domain: prepared.brief.domain,
+                  status: prepared.brief.status,
+                  opportunities: prepared.brief.opportunities,
+                  context: prepared.brief.context,
+                  selection: prepared.brief.selection,
+                  missingFields: prepared.brief.missingFields,
+                },
+                ...(prepared.status === "needs_details"
+                  ? { missingFields: prepared.missingFields }
+                  : {}),
+              });
+              return;
+            }
+            const registered = chatStore.registerSeoArticleJob(prepared.jobInput);
+            sendJson(response, registered.created ? 201 : 200, {
+              schemaVersion: 1,
+              status: registered.job.status,
+              brief: {
+                briefId: prepared.brief.briefId,
+                selection: prepared.brief.selection,
+                context: prepared.brief.context,
+              },
+              ...registered,
+            });
+            return;
+          }
+          if (request.method === "PATCH") {
+            const update = validateSeoArticleJobUpdate(
+              await readRequestBody(request, MAX_SEO_ARTICLE_REQUEST_BYTES),
+            );
+            const job = chatStore.updateSeoArticleJob(update.sessionId, update.jobId, update);
+            sendJson(response, 200, { schemaVersion: 1, job });
+            return;
+          }
+          if (request.method === "GET") {
+            const sessionId = validateSessionId(url.searchParams.get("sessionId"));
+            const jobId = url.searchParams.get("jobId");
+            const domain = url.searchParams.get("domain");
+            const job = jobId !== null
+              ? chatStore.getSeoArticleJob(
+                  sessionId,
+                  businessMemoryText(jobId, "article job ID", 160),
+                )
+              : domain !== null
+                ? chatStore.getLatestSeoArticleJob(sessionId, validateBusinessDomain(domain))
+                : undefined;
+            if (job === undefined) {
+              throw new PublicError(
+                404,
+                "SEO_ARTICLE_NOT_FOUND",
+                "That article job is not saved for this conversation.",
+              );
+            }
+            const version = job.latestVersionId === undefined
+              ? undefined
+              : chatStore.getSeoArticleVersionForJob(sessionId, job.jobId, job.latestVersionId);
+            const previousVersion = version === undefined
+              ? chatStore.getLatestSuccessfulSeoArticleVersion(sessionId, job.domain)
+              : undefined;
+            sendJson(response, 200, {
+              schemaVersion: 1,
+              job,
+              ...(version === undefined
+                ? {}
+                : {
+                    article: {
+                      versionId: version.versionId,
+                      versionNumber: version.versionNumber,
+                      status: version.status,
+                      metadata: version.metadata,
+                      warnings: version.warnings,
+                      reviewStatus: version.reviewStatus,
+                      qualityReport: version.qualityReport,
+                      createdAt: version.createdAt,
+                      downloadUrl: `/api/seo-article/download/${version.downloadToken}.md`,
+                    },
+                  }),
+              ...(previousVersion === undefined
+                ? {}
+                : {
+                    previousArticle: {
+                      versionId: previousVersion.versionId,
+                      versionNumber: previousVersion.versionNumber,
+                      status: previousVersion.status,
+                      metadata: previousVersion.metadata,
+                      warnings: previousVersion.warnings,
+                      reviewStatus: previousVersion.reviewStatus,
+                      qualityReport: previousVersion.qualityReport,
+                      createdAt: previousVersion.createdAt,
+                      downloadUrl: `/api/seo-article/download/${previousVersion.downloadToken}.md`,
+                    },
+                  }),
+            });
+            return;
+          }
+          sendJson(
+            response,
+            405,
+            { error: { code: "INVALID_REQUEST", message: "That method is not supported." } },
+            { Allow: "GET, POST, PATCH" },
+          );
+        } catch (error) {
+          if (error instanceof PublicError) {
+            sendError(response, error);
+          } else {
+            options.logError?.("Could not access the SEO article job", error);
+            sendError(
+              response,
+              new PublicError(409, "SEO_ARTICLE_ERROR", "The article job could not be updated safely."),
+            );
+          }
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/seo-article/context") {
+        try {
+          if (request.method !== "GET") {
+            sendJson(
+              response,
+              405,
+              { error: { code: "INVALID_REQUEST", message: "That method is not supported." } },
+              { Allow: "GET" },
+            );
+            return;
+          }
+          const sessionId = validateSessionId(url.searchParams.get("sessionId"));
+          const jobId = businessMemoryText(url.searchParams.get("jobId"), "article job ID", 160);
+          const job = chatStore.getSeoArticleJob(sessionId, jobId);
+          if (job === undefined) {
+            throw new PublicError(404, "SEO_ARTICLE_NOT_FOUND", "That article job is not saved for this conversation.");
+          }
+          const brief = job.briefId
+            ? chatStore.getArticleBrief(sessionId, job.briefId)
+            : undefined;
+          const memory = brief === undefined ? chatStore.getBusinessMemory(job.domain) : undefined;
+          const snapshot = brief === undefined ? chatStore.getLatestSeoSnapshot(job.domain) : undefined;
+          const profile = profileStore === undefined ? undefined : await profileStore.read();
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            job,
+            ...(brief === undefined ? {} : { brief }),
+            ...(memory === undefined ? {} : { memory }),
+            ...(snapshot === undefined ? {} : { snapshot }),
+            ...(profile === undefined ? {} : { profile }),
+          });
+        } catch (error) {
+          if (error instanceof PublicError) sendError(response, error);
+          else {
+            options.logError?.("Could not prepare SEO article context", error);
+            sendError(response, new PublicError(500, "SEO_ARTICLE_ERROR", "The saved research could not be prepared."));
+          }
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/seo-article/versions") {
+        try {
+          if (request.method !== "PUT") {
+            sendJson(
+              response,
+              405,
+              { error: { code: "INVALID_REQUEST", message: "That method is not supported." } },
+              { Allow: "PUT" },
+            );
+            return;
+          }
+          const candidate = businessMemoryObject(
+            await readRequestBody(request, MAX_SEO_ARTICLE_REQUEST_BYTES),
+            "article version",
+          );
+          const sessionId = validateSessionId(candidate.sessionId);
+          const jobId = businessMemoryText(candidate.jobId, "article job ID", 160);
+          const job = chatStore.getSeoArticleJob(sessionId, jobId);
+          if (job === undefined) {
+            throw new PublicError(404, "SEO_ARTICLE_NOT_FOUND", "That article job is not saved for this conversation.");
+          }
+          const saved = chatStore.saveSeoArticleVersion(
+            sessionId,
+            jobId,
+            articleVersionInput(candidate, job.primaryKeyword, job.domain, job.supportingKeywords),
+          );
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            job: saved.job,
+            article: {
+              versionId: saved.version.versionId,
+              versionNumber: saved.version.versionNumber,
+              status: saved.version.status,
+              metadata: saved.version.metadata,
+              warnings: saved.version.warnings,
+              reviewStatus: saved.version.reviewStatus,
+              qualityReport: saved.version.qualityReport,
+              createdAt: saved.version.createdAt,
+              downloadUrl: `/api/seo-article/download/${saved.version.downloadToken}.md`,
+            },
+          });
+        } catch (error) {
+          if (error instanceof PublicError) sendError(response, error);
+          else {
+            options.logError?.("Could not save SEO article version", error);
+            sendError(response, new PublicError(500, "SEO_ARTICLE_ERROR", "The article could not be saved."));
+          }
+        }
+        return;
+      }
+
+      const articleDownload = url.pathname.match(/^\/api\/seo-article\/download\/([A-Za-z0-9_-]{40,60})\.md$/);
+      if (articleDownload !== null) {
+        if (request.method !== "GET" && request.method !== "HEAD") {
+          sendJson(
+            response,
+            405,
+            { error: { code: "INVALID_REQUEST", message: "That method is not supported." } },
+            { Allow: "GET, HEAD" },
+          );
+          return;
+        }
+        const token = articleDownload[1] ?? "";
+        const version = chatStore.getSeoArticleVersionByDownloadToken(token);
+        if (version === undefined) {
+          sendError(response, new PublicError(404, "SEO_ARTICLE_NOT_FOUND", "That article download is not available."));
+          return;
+        }
+        const slug = typeof version.metadata.slug === "string" ? version.metadata.slug : "seo-article";
+        if (request.method === "HEAD") {
+          response.writeHead(200, {
+            ...SECURITY_HEADERS,
+            "Cache-Control": "no-store",
+            "Content-Type": "text/markdown; charset=utf-8",
+          });
+          response.end();
+          return;
+        }
+        sendMarkdown(response, version.markdown, `${slug}.md`);
+        return;
+      }
+
+      if (url.pathname === "/api/paid-domain-research") {
+        try {
+          if (request.method === "GET") {
+            const requestedJobId = url.searchParams.get("jobId");
+            const requestedSessionId = url.searchParams.get("sessionId");
+            const requestedDomain = url.searchParams.get("domain");
+            if (requestedJobId !== null) {
+              const sessionId = validateSessionId(requestedSessionId);
+              const jobId = businessMemoryText(requestedJobId, "job ID", 160);
+              const snapshot = jobId
+                ? chatStore.getSeoSnapshotForJob(sessionId, jobId)
+                : undefined;
+              if (snapshot === undefined) {
+                throw new PublicError(
+                  404,
+                  "RESEARCH_JOB_NOT_FOUND",
+                  "That paid research job is not saved for this conversation.",
+                );
+              }
+              sendJson(response, 200, { schemaVersion: 1, snapshot });
+              return;
+            }
+            if (requestedDomain !== null) {
+              const domain = validateBusinessDomain(requestedDomain);
+              const snapshot = chatStore.getLatestSeoSnapshot(domain);
+              const history = chatStore.listSeoSnapshotSummaries(domain, 20);
+              const articleBrief = requestedSessionId === null || snapshot === undefined
+                ? undefined
+                : prepareArticleBrief(
+                    chatStore,
+                    validateSessionId(requestedSessionId),
+                    domain,
+                    profileStore === undefined ? emptyProfile() : await profileStore.read(),
+                  );
+              sendJson(response, 200, {
+                schemaVersion: 1,
+                ...(snapshot === undefined ? {} : { snapshot }),
+                ...(articleBrief === undefined ? {} : { articleBrief }),
+                history,
+              });
+              return;
+            }
+            if (requestedSessionId !== null) {
+              throw new PublicError(
+                400,
+                "INVALID_REQUEST",
+                "Choose a website before preparing article ideas.",
+              );
+            }
+            sendJson(response, 200, {
+              schemaVersion: 1,
+              history: chatStore.listSeoSnapshotSummaries(undefined, 50),
+            });
+            return;
+          }
+          if (request.method === "PUT") {
+            const candidate = businessMemoryObject(
+              await readRequestBody(request, MAX_PAID_RESEARCH_REQUEST_BYTES),
+              "paid research payload",
+            );
+            const sessionId = validateSessionId(candidate.sessionId);
+            const snapshot = validateSeoSnapshot(candidate.snapshot);
+            const memory = candidate.memory === undefined
+              ? undefined
+              : validateBusinessMemory(candidate.memory);
+            const saved = chatStore.savePaidDomainResearchForJob(
+              sessionId,
+              snapshot,
+              memory,
+            );
+            const articleBrief = snapshot.status === "failed"
+              ? undefined
+              : prepareArticleBrief(
+                  chatStore,
+                  sessionId,
+                  snapshot.domain,
+                  profileStore === undefined ? emptyProfile() : await profileStore.read(),
+                );
+            sendJson(response, 200, {
+              schemaVersion: 1,
+              ...saved,
+              ...(articleBrief === undefined ? {} : { articleBrief }),
+            });
+            return;
+          }
+          sendJson(
+            response,
+            405,
+            {
+              error: {
+                code: "INVALID_REQUEST",
+                message: "That method is not supported.",
+              },
+            },
+            { Allow: "GET, PUT" },
+          );
+        } catch (error) {
+          if (error instanceof PublicError) {
+            sendError(response, error);
+          } else {
+            options.logError?.("Could not access paid domain research", error);
+            sendError(
+              response,
+              new PublicError(
+                500,
+                "BUSINESS_MEMORY_ERROR",
+                "Paid domain research is not available right now.",
+              ),
+            );
+          }
+        }
+        return;
+      }
+
+      if (url.pathname === "/api/business-memory") {
+        try {
+          if (request.method === "GET") {
+            const requestedDomain = url.searchParams.get("domain");
+            const memories = requestedDomain === null
+              ? chatStore.listBusinessMemorySummaries(50)
+              : [chatStore.getBusinessMemory(validateBusinessDomain(requestedDomain))].filter(
+                  (memory) => memory !== undefined,
+                );
+            sendJson(response, 200, { schemaVersion: 1, memories });
+            return;
+          }
+          if (request.method === "PUT") {
+            const body = await readRequestBody(
+              request,
+              MAX_BUSINESS_MEMORY_REQUEST_BYTES,
+            );
+            const candidate = businessMemoryObject(body, "payload");
+            const sessionId = validateSessionId(candidate.sessionId);
+            const memory = chatStore.saveBusinessMemoryForJob(
+              sessionId,
+              validateBusinessMemory(candidate),
+            );
+            const data = createArticleBriefData({
+              memory,
+              profile: profileStore === undefined ? emptyProfile() : await profileStore.read(),
+            });
+            const articleBrief = data === undefined
+              ? undefined
+              : chatStore.prepareArticleBrief(
+                  sessionId,
+                  memory.domain,
+                  researchKeyForBrief(data),
+                  data,
+                );
+            sendJson(response, 200, {
+              schemaVersion: 1,
+              memory,
+              ...(articleBrief === undefined ? {} : { articleBrief }),
+            });
+            return;
+          }
+          sendJson(
+            response,
+            405,
+            {
+              error: {
+                code: "INVALID_REQUEST",
+                message: "That method is not supported.",
+              },
+            },
+            { Allow: "GET, PUT" },
+          );
+        } catch (error) {
+          if (error instanceof PublicError) {
+            sendError(response, error);
+          } else {
+            options.logError?.("Could not access saved business research", error);
+            sendError(
+              response,
+              new PublicError(
+                500,
+                "BUSINESS_MEMORY_ERROR",
+                "Saved business research is not available right now.",
               ),
             );
           }
