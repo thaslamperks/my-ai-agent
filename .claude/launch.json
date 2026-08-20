@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "health-check",
+      "runtimeExecutable": "C:\\Users\\thaslam\\Desktop\\my-ai-agent\\.runtime\\node-v24.18.0-win-x64\\node.exe",
+      "runtimeArgs": ["C:\\Users\\thaslam\\AppData\\Local\\Temp\\claude\\C--Users-thaslam-Desktop-my-ai-agent\\c3a6b766-daed-4b58-8ca0-7942cf22b905\\scratchpad\\serve-health-check.js"],
+      "port": 4173
+    }
+  ]
+}
