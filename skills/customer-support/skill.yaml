@@ -1,4 +1,5 @@
 id: customer-support
+agent: sales
 name: Customer Support Replies
 version: 1.0.0
 description: Triage a message from an existing customer and draft a calm reply that promises nothing the owner has not decided.
